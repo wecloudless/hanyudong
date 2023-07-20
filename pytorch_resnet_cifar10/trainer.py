@@ -15,6 +15,7 @@ import torchvision.datasets as datasets
 import resnet
 import logging
 import sys
+import re
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -36,7 +37,7 @@ parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--epochs', '--epoch', default=200, type=int, metavar='N',
                     help='number of total epochs to run')
-parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
+parser.add_argument('--start-epoch', default=1, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
 parser.add_argument('-b', '--batch_size', default=128, type=int,
                     metavar='N', help='mini-batch size (default: 128)')
@@ -159,7 +160,7 @@ def main():
                                 weight_decay=args.weight_decay)
 
     lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
-                                                        milestones=[100, 150], last_epoch=args.start_epoch - 1)
+                                                        milestones=[100, 150], last_epoch=args.start_epoch - 2)
 
     if args.arch in ['resnet1202', 'resnet110']:
         # for resnet1202 original paper uses lr=0.01 for first 400 minibatches for warm-up
@@ -177,7 +178,7 @@ def main():
     lr = args.lr
     t1 = time.time()
     print("[profiling] init time: {}s".format(t1-t0))
-    for epoch in range(args.start_epoch, args.epochs):
+    for epoch in range(args.start_epoch, args.epochs + 1):
         beg_time = time.time()
 
         # train for one epoch
@@ -210,19 +211,20 @@ def main():
             'state_dict': model.state_dict(),
             'best_prec1': best_prec1,
         }, is_best, filename=os.path.join(args.save_dir, 'model.th'))"""
+        os.mkdir(checkpoint_dir.format(epoch=epoch))
         checkpoint_path = os.path.join(checkpoint_dir.format(epoch=epoch), 'checkpoint.pth')
         #start to save best performance model after learning rate decay to 0.01
         if best_prec1 < prec1:
             weights_path = checkpoint_path#.format(epoch=epoch)
             logging.info('saving weights file to {}'.format(weights_path))
-            torch.save(net.state_dict(), weights_path)
+            torch.save(model.state_dict(), weights_path)
             best_prec1 = prec1
             continue
 
         if not epoch % args.save_every:
             weights_path = checkpoint_path#.format(epoch=epoch)
             logging.info('saving weights file to {}'.format(weights_path))
-            torch.save(net.state_dict(), weights_path)
+            torch.save(model.state_dict(), weights_path)
 
         end_time = time.time()
         current_epoch_time = end_time - beg_time
