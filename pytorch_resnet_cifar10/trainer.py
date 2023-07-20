@@ -2,6 +2,7 @@ import argparse
 import os
 import shutil
 import time
+t0 = time.time()
 
 import torch
 import torch.nn as nn
@@ -60,12 +61,39 @@ parser.add_argument('--save-dir', dest='save_dir',
                     default='save_temp', type=str)
 parser.add_argument('--save-every', dest='save_every',
                     help='Saves checkpoints at every specified number of epochs',
-                    type=int, default=10)
+                    type=int, default=1)
 best_prec1 = 0
+accumulated_training_time = 0
+
+def most_recent_weights(weights_folder):
+    """
+        return most recent created weights file
+        if folder is empty return empty string
+    """
+    weight_files = os.listdir(weights_folder)
+    if len(weight_files) == 0:
+        return 0
+
+    regex_str = r'(\d+)'
+
+    # sort files by epoch
+    weight_files = sorted(weight_files, key=lambda w: int(re.search(regex_str, w).groups()[0]))
+
+    return weight_files[-1]
+
+def last_epoch(weights_folder):
+    weight_file = most_recent_weights(weights_folder)
+    if not weight_file:
+       return 0
+       #raise Exception('no recent weights were found')
+    resume_epoch = int(weight_file.split('-')[0])
+
+    return resume_epoch
 
 
 def main():
     global args, best_prec1
+    global accumulated_training_time, t0
     args = parser.parse_args()
 
 
@@ -77,7 +105,7 @@ def main():
     model.cuda()
 
     # optionally resume from a checkpoint
-    if args.resume:
+    """if args.resume:
         if os.path.isfile(args.resume):
             print("=> loading checkpoint '{}'".format(args.resume))
             checkpoint = torch.load(args.resume)
@@ -87,7 +115,14 @@ def main():
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.evaluate, checkpoint['epoch']))
         else:
-            print("=> no checkpoint found at '{}'".format(args.resume))
+            print("=> no checkpoint found at '{}'".format(args.resume))"""
+    
+    checkpoint_path = 'output/checkpoint'
+    if not os.path.exists(checkpoint_path):
+        os.makedirs(checkpoint_path)
+    resume_epoch = 0
+    resume_epoch = last_epoch(os.path.join(checkpoint_path))
+    checkpoint_dir = os.path.join(checkpoint_path, '{epoch}')
 
     cudnn.benchmark = True
 
@@ -140,6 +175,8 @@ def main():
     iteration, trained_samples = 0, 0
     total_samples = len(train_loader.dataset) * args.batch_size
     lr = args.lr
+    t1 = time.time()
+    print("[profiling] init time: {}s".format(t1-t0))
     for epoch in range(args.start_epoch, args.epochs):
         beg_time = time.time()
 
@@ -162,7 +199,7 @@ def main():
         is_best = prec1 > best_prec1
         best_prec1 = max(prec1, best_prec1)
 
-        if epoch > 0 and epoch % args.save_every == 0:
+        """if epoch > 0 and epoch % args.save_every == 0:
             save_checkpoint({
                 'epoch': epoch + 1,
                 'state_dict': model.state_dict(),
@@ -172,7 +209,20 @@ def main():
         save_checkpoint({
             'state_dict': model.state_dict(),
             'best_prec1': best_prec1,
-        }, is_best, filename=os.path.join(args.save_dir, 'model.th'))
+        }, is_best, filename=os.path.join(args.save_dir, 'model.th'))"""
+        checkpoint_path = os.path.join(checkpoint_dir.format(epoch=epoch), 'checkpoint.pth')
+        #start to save best performance model after learning rate decay to 0.01
+        if best_prec1 < prec1:
+            weights_path = checkpoint_path#.format(epoch=epoch)
+            logging.info('saving weights file to {}'.format(weights_path))
+            torch.save(net.state_dict(), weights_path)
+            best_prec1 = prec1
+            continue
+
+        if not epoch % args.save_every:
+            weights_path = checkpoint_path#.format(epoch=epoch)
+            logging.info('saving weights file to {}'.format(weights_path))
+            torch.save(net.state_dict(), weights_path)
 
         end_time = time.time()
         current_epoch_time = end_time - beg_time
@@ -187,6 +237,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
     """
         Run one train epoch
     """
+    global accumulated_training_time
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -198,6 +249,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
     end = time.time()
     one_batch_time_beg, one_batch_time_end = 0, 0
     for i, (input, target) in enumerate(train_loader):
+        t0 = time.time()
 
         if args.profiling and one_batch_time_beg == 0:
             one_batch_time_beg = time.time()
@@ -230,6 +282,8 @@ def train(train_loader, model, criterion, optimizer, epoch):
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
+        accumulated_training_time += end - t0
+        print("[profiling] step time: {}s, accumuated training time: {}s".format(end - t0, accumulated_training_time))
 
         if i % args.print_freq == 0:
             print('Epoch: [{0}][{1}/{2}]\t'
